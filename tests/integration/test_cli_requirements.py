@@ -20,6 +20,8 @@ import os
 import random
 from collections.abc import Generator
 from glob import glob
+from io import BytesIO
+from json import loads as json_loads
 from os.path import basename, join, splitext
 from typing import Any
 from unittest import TestCase
@@ -133,6 +135,58 @@ class TestCliRequirements(TestCase, SnapshotMixin):
             infile)
         self.assertEqual(0, res, err)
         self.assertEqualSnapshot(out, 'index_auth', infile, sv, of)
+
+    def test_with_single_token_auth(self) -> None:
+        requirements = (
+            b'--index-url https://0123456789abcdef@pypi.company.com/simple/\n'
+            b'requests==2.32.3\n'
+            b'six @ git+https://ghp_0123456789abcdef@github.com/benjaminp/six.git@1.16.0\n'
+            b'ssh-pkg @ git+ssh://git@github.com/org/ssh-pkg.git@1.0.0\n'
+            b'env-pkg @ https://${PKG_TOKEN}@pypi.company.com/env-pkg-1.0.0.tar.gz\n'
+        )
+        res, out, err = run_cli(
+            'requirements',
+            '-vvv',
+            '--sv', SchemaVersion.V1_6.to_version(),
+            '--of', OutputFormat.JSON.name,
+            '--output-reproducible',
+            '-o=-',
+            '-',
+            inp=BytesIO(requirements),
+        )
+        self.assertEqual(0, res, err)
+        self.assertNotIn('0123456789abcdef', out)
+        self.assertNotIn('ghp_0123456789abcdef', out)
+        bom = json_loads(out)
+        components = {c['name']: c for c in bom['components']}
+        self.assertEqual(
+            'https://pypi.company.com/simple/requests/',
+            components['requests']['externalReferences'][0]['url'],
+        )
+        self.assertEqual(
+            'requirements line 3: six @ git+https://github.com/benjaminp/six.git@1.16.0',
+            components['six']['description'],
+        )
+        self.assertEqual(
+            'git+https://github.com/benjaminp/six.git@1.16.0',
+            components['six']['externalReferences'][0]['url'],
+        )
+        self.assertEqual(
+            'pkg:pypi/six?vcs_url=git%2Bhttps://github.com/benjaminp/six.git%401.16.0',
+            components['six']['purl'],
+        )
+        self.assertEqual(
+            'git+ssh://git@github.com/org/ssh-pkg.git@1.0.0',
+            components['ssh-pkg']['externalReferences'][0]['url'],
+        )
+        self.assertEqual(
+            'https://$%7BPKG_TOKEN%7D@pypi.company.com/env-pkg-1.0.0.tar.gz',
+            components['env-pkg']['externalReferences'][0]['url'],
+        )
+        self.assertEqual(
+            'requirements line 5: env-pkg @ https://${PKG_TOKEN}@pypi.company.com/env-pkg-1.0.0.tar.gz',
+            components['env-pkg']['description'],
+        )
 
     def assertEqualSnapshot(self, actual: str,  # noqa:N802
                             purpose: str,
